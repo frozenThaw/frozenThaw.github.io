@@ -60,7 +60,7 @@
           <span id="thLabel" class="pill ok">≥ 0.950</span>
         </div>
         <div style="height:12px"></div>
-        <div class="muted">Search Pictures：<span id="countPhotos">0</span><br/>Buckets：<span id="countBuckets">0</span><br/>TotalVisits：<span id="totalVisits">0</span></div>
+        <div class="muted">Search Pictures：<span id="countPhotos">0</span></div>
       </div>
     </section>
 
@@ -113,9 +113,9 @@ const ROOT_HASH = bytesToKey(new Uint8Array(16*16).fill(1));
 function bucketIndex(hash){ return Math.round(cmpHash(ROOT_HASH, hash) * 1000); }
 
 // ====== Index state ======
-const state={ dirHandle:null, photoHash:{}, bucket:{}, meta:{}, distance:20, totalVisits:0 };
+const state={ dirHandle:null, photoHash:{}, bucket:{}, meta:{}, distance:20 };
 function applyIndex(obj){ state.photoHash=obj.photoHash||{}; state.bucket=obj.bucket||{}; state.meta=obj.meta||{}; updateStats(); }
-function updateStats(){ document.getElementById('countPhotos').textContent=Object.keys(state.photoHash).length; document.getElementById('countBuckets').textContent=Object.keys(state.bucket).length; document.getElementById('totalVisits').textContent=state.totalVisits; }
+function updateStats(){ document.getElementById('countPhotos').textContent=Object.keys(state.photoHash).length;}
 function addToIndex(hashKey,relPath,w,h){ if(!state.photoHash[hashKey]) state.photoHash[hashKey]=relPath; const idx=String(bucketIndex(hashKey)); if(!state.bucket[idx]) state.bucket[idx]=[]; state.bucket[idx].push(hashKey); if(!state.meta[relPath]) state.meta[relPath]={w,h}; }
 
 // ====== FS traversal ======
@@ -214,7 +214,7 @@ async function renderCard(rel,sim){ let url=''; if(state.dirHandle){ const parts
      ${url?`<img class="thumb" src="${url}" alt="thumb" />`:`<div class="thumb"></div>`}`;
   resultsEl.appendChild(card);
 }
-async function handleFiles(files){ if(!state.photoHash||!Object.keys(state.photoHash).length){ alert('Please Build First'); return; } clearResults(); const th=Number(thresholdEl.value); for(const file of files){ log(`Search：${file.name}（threshold ${th}）`); const rows=await searchFile(file,th); state.totalVisits+=1; updateStats(); if(!rows){ log('The file cannot be parsed.'); continue; } if(rows.length===0){ const empty=document.createElement('div'); empty.className='muted'; empty.textContent='No similar images.'; resultsEl.appendChild(empty); } else { for(const row of rows){ await renderCard(row.rel,row.sim); } log(`Return ${rows.length} Results.`); } } }
+async function handleFiles(files){ if(!state.photoHash||!Object.keys(state.photoHash).length){ alert('Please Build First'); return; } clearResults(); const th=Number(thresholdEl.value); for(const file of files){ log(`Search：${file.name}（threshold ${th}）`); const rows=await searchFile(file,th); updateStats(); if(!rows){ log('The file cannot be parsed.'); continue; } if(rows.length===0){ const empty=document.createElement('div'); empty.className='muted'; empty.textContent='No similar images.'; resultsEl.appendChild(empty); } else { for(const row of rows){ await renderCard(row.rel,row.sim); } log(`Return ${rows.length} Results.`); } } }
 ['dragenter','dragover'].forEach(ev=>dropzone.addEventListener(ev,e=>{ e.preventDefault(); dropzone.classList.add('dragover'); }));
 ['dragleave','drop'].forEach(ev=>dropzone.addEventListener(ev,e=>{ e.preventDefault(); dropzone.classList.remove('dragover'); }));
 dropzone.addEventListener('drop',async e=>{ const files=[...e.dataTransfer.files].filter(f=>isImageName(f.name)); await handleFiles(files); });
