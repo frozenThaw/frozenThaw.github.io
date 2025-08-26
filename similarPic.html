@@ -43,38 +43,38 @@
   <main>
     <section class="row">
       <div class="card">
-        <h2>① 选择目录并构建索引</h2>
+        <h2>①Choose Directory To Search</h2>
         <div class="controls">
-          <button id="btnPickDir">选择目录</button>
-          <span id="libStatus" class="muted">未选择目录</span>
-          <button id="btnDoBuild" disabled>构建</button>
+          <button id="btnPickDir">Choose Directory</button>
+          <span id="libStatus" class="muted">Not Selected</span>
+          <button id="btnDoBuild" disabled>Build</button>
         </div>
         <div style="height:8px"></div>
         <div class="log mono" id="log"></div>
       </div>
       <div class="card">
-        <h2>② 搜索参数</h2>
+        <h2>②Setting</h2>
         <div class="slider-wrap">
-          <label for="threshold">相似度阈值</label>
+          <label for="threshold">Similar</label>
           <input type="range" id="threshold" min="0.9" max="1.0" value="0.95" step="0.005">
           <span id="thLabel" class="pill ok">≥ 0.950</span>
         </div>
         <div style="height:12px"></div>
-        <div class="muted">索引图片数：<span id="countPhotos">0</span><br/>分桶数：<span id="countBuckets">0</span><br/>总访问次数：<span id="totalVisits">0</span></div>
+        <div class="muted">Search Pictures：<span id="countPhotos">0</span><br/>Buckets：<span id="countBuckets">0</span><br/>TotalVisits：<span id="totalVisits">0</span></div>
       </div>
     </section>
 
     <section>
       <div class="card">
-        <h2>③ 拖放图片进行搜索</h2>
+        <h2>③Drag and Drop</h2>
         <div id="dropzone" class="dropzone">
           将图片文件拖到这里，或点击选择
           <br><br>
-          <button id="btnPickFile" class="btn">选择图片</button>
+          <button id="btnPickFile" class="btn">Select Picture</button>
         </div>
       </div>
       <div class="card" style="margin-top:16px">
-        <h2>匹配结果（最多 100 张）</h2>
+        <h2>Results</h2>
         <div id="results" class="grid"></div>
       </div>
     </section>
@@ -129,14 +129,14 @@ const btnDoBuild=document.getElementById('btnDoBuild');
 
 btnPickDir.addEventListener('click', async()=>{
   if(!('showDirectoryPicker' in window)){
-    alert('此浏览器不支持 File System Access API，请使用最新版 Chrome/Edge。');
+    alert('This browser does not support the File System Access API. Please use the latest version of Chrome/Edge.');
     return;
   }
   try{
     const handle=await window.showDirectoryPicker({mode:'readwrite'});
     state.dirHandle=handle; 
-    libStatus.textContent=`目录：${handle.name}`; 
-    log(`目录已选择：${handle.name}`);
+    libStatus.textContent=`Directory : ${handle.name}`; 
+    log(`Directory has selected :${handle.name}`);
 
     // 检查是否存在 hash.json
     let hasHash=false; 
@@ -148,41 +148,41 @@ btnPickDir.addEventListener('click', async()=>{
         const text=await file.text();
         const obj=JSON.parse(text);
         applyIndex(obj);
-        log('已从 hash.json 导入索引。');
+        log('has been imported from hash.json');
       }catch(e){
-        log('读取 hash.json 失败，将需要重新构建。');
+        log('reading hash.json failed and a rebuild will be required.');
       }
     } else {
-      log('未检测到 hash.json，请先构建索引。');
+      log('hash.json was not detected. Please build first.');
     }
 
 
     updateBuildButton(hasHash);
-  }catch(e){ log('用户取消选择目录。'); }
+  }catch(e){}
 });
 
 function updateBuildButton(hasHash){
   btnDoBuild.disabled=false;
-  btnDoBuild.textContent = hasHash ? '重新构建' : '构建';
+  btnDoBuild.textContent = hasHash ? 'Rebuild' : 'Build';
 }
 
 btnDoBuild.addEventListener('click', async()=>{
-  if(!state.dirHandle){ alert('请先选择目录'); return; }
+  if(!state.dirHandle){ alert('Please select the directory first'); return; }
   const idxObj=await buildIndexToDir();
   if(idxObj){ applyIndex(idxObj); updateBuildButton(true); }
 });
 
 async function buildIndexToDir(){
   if(!state.dirHandle) return;
-  log('开始构建索引…'); let count=0; state.photoHash={}; state.bucket={}; state.meta={};
+  log('Start building …'); let count=0; state.photoHash={}; state.bucket={}; state.meta={};
   for await(const {handle,rel} of walkDir(state.dirHandle)){
     if(!isImageName(rel)) continue;
-    try{ const file=await handle.getFile(); const bmp=await loadImageBitmap(file); const key=await pHashFromBitmap(bmp); if(key){ addToIndex(key,rel,bmp.width,bmp.height); count++; if(count%20===0) log(`已处理 ${count} 张…`); } }
-    catch{ log(`跳过：${rel}`); }
+    try{ const file=await handle.getFile(); const bmp=await loadImageBitmap(file); const key=await pHashFromBitmap(bmp); if(key){ addToIndex(key,rel,bmp.width,bmp.height); count++; if(count%20===0) log(`handle ${count};`); } }
+    catch{ log(`Skip ${rel}`); }
   }
   const idxObj={ photoHash:state.photoHash, bucket:state.bucket, meta:state.meta };
-  try{ const fh=await state.dirHandle.getFileHandle('hash.json',{create:true}); const w=await fh.createWritable(); await w.write(JSON.stringify(idxObj)); await w.close(); log('已写入 hash.json 至图片库目录。'); }catch{ log('写入 hash.json 失败'); }
-  updateStats(); log(`索引完成，合计 ${count} 张。`);
+  try{ const fh=await state.dirHandle.getFileHandle('hash.json',{create:true}); const w=await fh.createWritable(); await w.write(JSON.stringify(idxObj)); await w.close(); log('hash.json written to the pictures directory'); }catch{ log('written hash.json failed'); }
+  updateStats(); log(`Build Finish，Total Pics : ${count}`);
   return idxObj;
 }
 
@@ -206,7 +206,7 @@ async function renderCard(rel,sim){ let url=''; if(state.dirHandle){ const parts
   const meta=state.meta[rel]||{w:0,h:0};
   const card=document.createElement('div'); card.className='result';
   card.innerHTML=
-    `<header><span class="pill">相似度 ${fmtPct(sim)}</span></header>
+    `<header><span class="pill">Similar ${fmtPct(sim)}</span></header>
      <div class="meta mono">
        <div>${rel}</div>
        <div class="muted">${meta.w}×${meta.h}</div>
@@ -214,7 +214,7 @@ async function renderCard(rel,sim){ let url=''; if(state.dirHandle){ const parts
      ${url?`<img class="thumb" src="${url}" alt="thumb" />`:`<div class="thumb"></div>`}`;
   resultsEl.appendChild(card);
 }
-async function handleFiles(files){ if(!state.photoHash||!Object.keys(state.photoHash).length){ alert('请先构建索引'); return; } clearResults(); const th=Number(thresholdEl.value); for(const file of files){ log(`搜索：${file.name}（阈值 ${th}）`); const rows=await searchFile(file,th); state.totalVisits+=1; updateStats(); if(!rows){ log('无法解析该文件。'); continue; } if(rows.length===0){ const empty=document.createElement('div'); empty.className='muted'; empty.textContent='未找到满足阈值的相似图片。'; resultsEl.appendChild(empty); } else { for(const row of rows){ await renderCard(row.rel,row.sim); } log(`返回 ${rows.length} 条结果。`); } } }
+async function handleFiles(files){ if(!state.photoHash||!Object.keys(state.photoHash).length){ alert('Please Build First'); return; } clearResults(); const th=Number(thresholdEl.value); for(const file of files){ log(`Search：${file.name}（threshold ${th}）`); const rows=await searchFile(file,th); state.totalVisits+=1; updateStats(); if(!rows){ log('The file cannot be parsed.'); continue; } if(rows.length===0){ const empty=document.createElement('div'); empty.className='muted'; empty.textContent='No similar images.'; resultsEl.appendChild(empty); } else { for(const row of rows){ await renderCard(row.rel,row.sim); } log(`Return ${rows.length} Results.`); } } }
 ['dragenter','dragover'].forEach(ev=>dropzone.addEventListener(ev,e=>{ e.preventDefault(); dropzone.classList.add('dragover'); }));
 ['dragleave','drop'].forEach(ev=>dropzone.addEventListener(ev,e=>{ e.preventDefault(); dropzone.classList.remove('dragover'); }));
 dropzone.addEventListener('drop',async e=>{ const files=[...e.dataTransfer.files].filter(f=>isImageName(f.name)); await handleFiles(files); });
