@@ -74,7 +74,7 @@
         </div>
       </div>
       <div class="card" style="margin-top:16px">
-        <h2>匹配结果</h2>
+        <h2>匹配结果（最多 100 张）</h2>
         <div id="results" class="grid"></div>
       </div>
     </section>
@@ -141,7 +141,6 @@ btnPickDir.addEventListener('click', async()=>{
     // 检查是否存在 hash.json
     let hasHash=false; 
     try{ await handle.getFileHandle('hash.json'); hasHash=true; }catch{}
-
     if(hasHash){
       try{
         const fh=await handle.getFileHandle('hash.json');
@@ -157,20 +156,7 @@ btnPickDir.addEventListener('click', async()=>{
       log('未检测到 hash.json，请先构建索引。');
     }
 
-    updateBuildButton(hasHash);
-  }catch(e){ log('用户取消选择目录。'); }
-});
-    return;
-  }
-  try{
-    const handle=await window.showDirectoryPicker({mode:'readwrite'});
-    state.dirHandle=handle; 
-    libStatus.textContent=`目录：${handle.name}`; 
-    log(`目录已选择：${handle.name}`);
 
-    // 检查是否存在 hash.json
-    let hasHash=false; 
-    try{ await handle.getFileHandle('hash.json'); hasHash=true; }catch{}
     updateBuildButton(hasHash);
   }catch(e){ log('用户取消选择目录。'); }
 });
