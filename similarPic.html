@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SimilarPicFinder Web (no OpenCV)</title>
+  <style>
+    :root { --bg:#0b1020; --panel:#121936; --text:#eef0ff; --muted:#b8bce6; --brand:#6ea8fe; --accent:#8bd3ff; --good:#34d399; --warn:#f59e0b; }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:linear-gradient(180deg,#0b1020,#0f1730 35%,#0b1020);color:var(--text)}
+    header{padding:20px 24px;border-bottom:1px solid rgba(255,255,255,.08);position:sticky;top:0;background:rgba(11,16,32,.8);backdrop-filter:blur(8px)}
+    h1{margin:0;font-size:20px;letter-spacing:.2px}
+    main{padding:20px;max-width:1100px;margin:0 auto;display:grid;gap:16px}
+    .row{display:grid;grid-template-columns:1.2fr .8fr;gap:16px}
+    .card{background:var(--panel);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:16px;box-shadow:0 6px 30px rgba(0,0,0,.25)}
+    .card h2{margin:0 0 12px;font-size:16px;color:var(--accent)}
+    .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    button{background:linear-gradient(180deg,#2b3a7a,#26336d);color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:10px;padding:10px 14px;cursor:pointer;font-weight:600}
+    button:hover{filter:brightness(1.08)}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    select{background:#0f1730;color:var(--text);border:1px solid rgba(255,255,255,.2);border-radius:10px;padding:8px 10px}
+    .muted{color:var(--muted);font-size:13px}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+    .dropzone{border:2px dashed rgba(255,255,255,.2);border-radius:14px;padding:28px;text-align:center;transition:.2s ease}
+    .dropzone.dragover{border-color:var(--brand);background:rgba(110,168,254,.08)}
+    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+    .result{border:1px solid rgba(255,255,255,.1);border-radius:12px;overflow:hidden;background:rgba(255,255,255,.03)}
+    .result header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:rgba(255,255,255,.03);border-bottom:1px solid rgba(255,255,255,.06);position:static}
+    .thumb{width:100%;aspect-ratio:4/3;object-fit:cover;background:#11172f;display:block}
+    .meta{padding:8px 10px;line-height:1.4}
+    .slider-wrap{display:flex;align-items:center;gap:12px}
+    input[type="range"]{width:240px}
+    .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.12);padding:4px 8px;border-radius:999px;font-size:12px}
+    .ok{color:var(--good);border-color:rgba(52,211,153,.4)}
+    .warn{color:var(--warn);border-color:rgba(245,158,11,.4)}
+    .log{max-height:180px;overflow:auto;font-size:12px;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>SimilarPicFinder</h1>
+  </header>
+  <main>
+    <section class="row">
+      <div class="card">
+        <h2>① 选择目录并构建索引</h2>
+        <div class="controls">
+          <button id="btnPickDir">选择目录</button>
+          <span id="libStatus" class="muted">未选择目录</span>
+          <button id="btnDoBuild" disabled>构建</button>
+        </div>
+        <div style="height:8px"></div>
+        <div class="log mono" id="log"></div>
+      </div>
+      <div class="card">
+        <h2>② 搜索参数</h2>
+        <div class="slider-wrap">
+          <label for="threshold">相似度阈值</label>
+          <input type="range" id="threshold" min="0.9" max="1.0" value="0.95" step="0.005">
+          <span id="thLabel" class="pill ok">≥ 0.950</span>
+        </div>
+        <div style="height:12px"></div>
+        <div class="muted">索引图片数：<span id="countPhotos">0</span><br/>分桶数：<span id="countBuckets">0</span><br/>总访问次数：<span id="totalVisits">0</span></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="card">
+        <h2>③ 拖放图片进行搜索</h2>
+        <div id="dropzone" class="dropzone">
+          将图片文件拖到这里，或点击选择
+          <br><br>
+          <button id="btnPickFile" class="btn">选择图片</button>
+        </div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h2>匹配结果</h2>
+        <div id="results" class="grid"></div>
+      </div>
+    </section>
+  </main>
+
+<script type="module">
+// ====== Utility: logging ======
+const logEl = document.getElementById('log');
+function log(msg){ const t=new Date().toLocaleTimeString(); logEl.textContent += `[${t}] ${msg}\n`; logEl.scrollTop = logEl.scrollHeight; }
+
+// ====== Bytes <-> base64 ======
+function bytesToKey(u8){ let bin=''; for(let i=0;i<u8.length;i++) bin+=String.fromCharCode(u8[i]); return btoa(bin); }
+function keyToBytes(str){ const bin=atob(str); const u8=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i); return u8; }
+
+// ====== Image helpers ======
+const CANVAS_64 = new OffscreenCanvas(64,64); const CTX64 = CANVAS_64.getContext('2d',{willReadFrequently:true});
+async function loadImageBitmap(file){ const blob = file instanceof Blob ? file : await file.getFile(); try{ return await createImageBitmap(blob,{premultiplyAlpha:'premultiply'}); }catch{ return new Promise((resolve,reject)=>{ const url=URL.createObjectURL(blob); const img=new Image(); img.onload=()=>{ resolve(img); URL.revokeObjectURL(url); }; img.onerror=e=>{ reject(e); URL.revokeObjectURL(url); }; img.src=url; }); } }
+function grayFromImageData(imgData){ const {data,width,height}=imgData; const out=new Float32Array(width*height); for(let i=0,p=0;i<data.length;i+=4,p++){ const r=data[i],g=data[i+1],b=data[i+2]; out[p]=0.299*r+0.587*g+0.114*b; } return {data:out,width,height}; }
+function meanRow(gray,y,w){ let s=0,off=y*w; for(let x=0;x<w;x++) s+=gray[off+x]; return s/w; }
+function meanCol(gray,x,w,h){ let s=0; for(let y=0;y<h;y++) s+=gray[y*w+x]; return s/h; }
+async function trimAndResize64(imgBitmap){ const w=imgBitmap.width,h=imgBitmap.height; const cvs=new OffscreenCanvas(w,h); const ctx=cvs.getContext('2d',{willReadFrequently:true}); ctx.drawImage(imgBitmap,0,0); const imgData=ctx.getImageData(0,0,w,h); const grayObj=grayFromImageData(imgData); const gray=grayObj.data; let top=0,bottom=h,left=0,right=w; for(let y=0;y<h;y++){ if(meanRow(gray,y,w)===0) top=y+1; else break; } for(let y=h-1;y>=0;y--){ if(meanRow(gray,y,w)===0) bottom=y; else break; } for(let x=0;x<w;x++){ if(meanCol(gray,x,w,h)===0) left=x+1; else break; } for(let x=w-1;x>=0;x--){ if(meanCol(gray,x,w,h)===0) right=x; else break; } const tw=Math.max(1,right-left), th=Math.max(1,bottom-top); CTX64.clearRect(0,0,64,64); CTX64.drawImage(cvs,left,top,tw,th,0,0,64,64); const outData=CTX64.getImageData(0,0,64,64); return grayFromImageData(outData).data; }
+
+// ====== DCT/IDCT ======
+function buildCosTable(N){ const t=new Float32Array(N*N); const factor=Math.PI/(2*N); for(let k=0;k<N;k++) for(let n=0;n<N;n++) t[k*N+n]=Math.cos((2*n+1)*k*factor); return t; }
+function dct1D(vec,N,cos){ const out=new Float32Array(N); const s0=Math.sqrt(1/N), s=Math.sqrt(2/N); for(let k=0;k<N;k++){ let sum=0,row=k*N; for(let n=0;n<N;n++) sum+=vec[n]*cos[row+n]; out[k]=(k===0?s0:s)*sum; } return out; }
+function idct1D(coeffs,N,cos){ const out=new Float32Array(N); const s0=Math.sqrt(1/N), s=Math.sqrt(2/N); for(let n=0;n<N;n++){ let sum=s0*coeffs[0]*cos[0*N+n]; for(let k=1;k<N;k++) sum+=s*coeffs[k]*cos[k*N+n]; out[n]=sum; } return out; }
+function dct2D(mat,H,W){ const cosH=buildCosTable(H), cosW=buildCosTable(W); const tmp=new Float32Array(H*W), out=new Float32Array(H*W); for(let y=0;y<H;y++){ const row=mat.subarray(y*W,(y+1)*W); tmp.set(dct1D(row,W,cosW),y*W); } for(let x=0;x<W;x++){ const col=new Float32Array(H); for(let y=0;y<H;y++) col[y]=tmp[y*W+x]; const d=dct1D(col,H,cosH); for(let y=0;y<H;y++) out[y*W+x]=d[y]; } return out; }
+function idct2D(coeff,H,W){ const cosH=buildCosTable(H), cosW=buildCosTable(W); const tmp=new Float32Array(H*W), out=new Float32Array(H*W); for(let x=0;x<W;x++){ const col=new Float32Array(H); for(let y=0;y<H;y++) col[y]=coeff[y*W+x]; const s=idct1D(col,H,cosH); for(let y=0;y<H;y++) tmp[y*W+x]=s[y]; } for(let y=0;y<H;y++){ const row=tmp.subarray(y*W,(y+1)*W); const s=idct1D(row,W,cosW); out.set(s,y*W); } return out; }
+
+// ====== pHash ======
+async function pHashFromBitmap(imgBitmap){ const Y=await trimAndResize64(imgBitmap); const H=64,W=64; const dct=dct2D(Y,H,W); const rh=16,rw=16; const roi=new Float32Array(rh*rw); for(let y=0;y<rh;y++) for(let x=0;x<rw;x++) roi[y*rw+x]=dct[y*W+x]; const back=idct2D(roi,rh,rw); let min=Infinity,max=-Infinity; for(const v of back){ if(v<min)min=v; if(v>max)max=v; } if(min<0){ const off=-min; for(let i=0;i<back.length;i++) back[i]+=off; max+=-min; min=0; } if(min===0 && max===0) return null; const sorted=Array.from(back).sort((a,b)=>a-b); const mid=Math.floor(sorted.length/2); const median=sorted.length%2?sorted[mid]:(sorted[mid-1]+sorted[mid])/2; let mmax=-Infinity; for(let i=0;i<back.length;i++){ const r=back[i]/(median||1e-9); if(r>mmax)mmax=r; } if(!(mmax>0)) return null; const u8=new Uint8Array(back.length); for(let i=0;i<back.length;i++){ const v=Math.floor((back[i]/(median||1e-9))/mmax*255); u8[i]=Math.max(0,Math.min(255,v)); } return bytesToKey(u8); }
+
+// ====== Similarity & buckets ======
+function cmpHash(h1,h2){ const a=keyToBytes(h1), b=keyToBytes(h2); let n1=0,n2=0,d=0; const L=Math.min(a.length,b.length); for(let i=0;i<L;i++){ d+=a[i]*b[i]; n1+=a[i]*a[i]; n2+=b[i]*b[i]; } n1=Math.sqrt(n1); n2=Math.sqrt(n2); return (n1===0||n2===0)?0:d/(n1*n2); }
+const ROOT_HASH = bytesToKey(new Uint8Array(16*16).fill(1));
+function bucketIndex(hash){ return Math.round(cmpHash(ROOT_HASH, hash) * 1000); }
+
+// ====== Index state ======
+const state={ dirHandle:null, photoHash:{}, bucket:{}, meta:{}, distance:20, totalVisits:0 };
+function applyIndex(obj){ state.photoHash=obj.photoHash||{}; state.bucket=obj.bucket||{}; state.meta=obj.meta||{}; updateStats(); }
+function updateStats(){ document.getElementById('countPhotos').textContent=Object.keys(state.photoHash).length; document.getElementById('countBuckets').textContent=Object.keys(state.bucket).length; document.getElementById('totalVisits').textContent=state.totalVisits; }
+function addToIndex(hashKey,relPath,w,h){ if(!state.photoHash[hashKey]) state.photoHash[hashKey]=relPath; const idx=String(bucketIndex(hashKey)); if(!state.bucket[idx]) state.bucket[idx]=[]; state.bucket[idx].push(hashKey); if(!state.meta[relPath]) state.meta[relPath]={w,h}; }
+
+// ====== FS traversal ======
+async function* walkDir(dirHandle,prefix=''){ for await(const entry of dirHandle.values()){ const rel=prefix?`${prefix}/${entry.name}`:entry.name; if(entry.kind==='file'){ yield{handle:entry,rel}; } else if(entry.kind==='directory'&&!entry.name.startsWith('.')){ yield* walkDir(entry,rel); } } }
+function isImageName(name){ const ext=name.split('.').pop().toLowerCase(); return ['jpg','jpeg','png','bmp','webp'].includes(ext); }
+
+// ====== Build index ======
+const btnPickDir=document.getElementById('btnPickDir');
+const libStatus=document.getElementById('libStatus');
+const btnDoBuild=document.getElementById('btnDoBuild');
+
+btnPickDir.addEventListener('click', async()=>{
+  if(!('showDirectoryPicker' in window)){
+    alert('此浏览器不支持 File System Access API，请使用最新版 Chrome/Edge。');
+    return;
+  }
+  try{
+    const handle=await window.showDirectoryPicker({mode:'readwrite'});
+    state.dirHandle=handle; 
+    libStatus.textContent=`目录：${handle.name}`; 
+    log(`目录已选择：${handle.name}`);
+
+    // 检查是否存在 hash.json
+    let hasHash=false; 
+    try{ await handle.getFileHandle('hash.json'); hasHash=true; }catch{}
+
+    if(hasHash){
+      try{
+        const fh=await handle.getFileHandle('hash.json');
+        const file=await fh.getFile();
+        const text=await file.text();
+        const obj=JSON.parse(text);
+        applyIndex(obj);
+        log('已从 hash.json 导入索引。');
+      }catch(e){
+        log('读取 hash.json 失败，将需要重新构建。');
+      }
+    } else {
+      log('未检测到 hash.json，请先构建索引。');
+    }
+
+    updateBuildButton(hasHash);
+  }catch(e){ log('用户取消选择目录。'); }
+});
+    return;
+  }
+  try{
+    const handle=await window.showDirectoryPicker({mode:'readwrite'});
+    state.dirHandle=handle; 
+    libStatus.textContent=`目录：${handle.name}`; 
+    log(`目录已选择：${handle.name}`);
+
+    // 检查是否存在 hash.json
+    let hasHash=false; 
+    try{ await handle.getFileHandle('hash.json'); hasHash=true; }catch{}
+    updateBuildButton(hasHash);
+  }catch(e){ log('用户取消选择目录。'); }
+});
+
+function updateBuildButton(hasHash){
+  btnDoBuild.disabled=false;
+  btnDoBuild.textContent = hasHash ? '重新构建' : '构建';
+}
+
+btnDoBuild.addEventListener('click', async()=>{
+  if(!state.dirHandle){ alert('请先选择目录'); return; }
+  const idxObj=await buildIndexToDir();
+  if(idxObj){ applyIndex(idxObj); updateBuildButton(true); }
+});
+
+async function buildIndexToDir(){
+  if(!state.dirHandle) return;
+  log('开始构建索引…'); let count=0; state.photoHash={}; state.bucket={}; state.meta={};
+  for await(const {handle,rel} of walkDir(state.dirHandle)){
+    if(!isImageName(rel)) continue;
+    try{ const file=await handle.getFile(); const bmp=await loadImageBitmap(file); const key=await pHashFromBitmap(bmp); if(key){ addToIndex(key,rel,bmp.width,bmp.height); count++; if(count%20===0) log(`已处理 ${count} 张…`); } }
+    catch{ log(`跳过：${rel}`); }
+  }
+  const idxObj={ photoHash:state.photoHash, bucket:state.bucket, meta:state.meta };
+  try{ const fh=await state.dirHandle.getFileHandle('hash.json',{create:true}); const w=await fh.createWritable(); await w.write(JSON.stringify(idxObj)); await w.close(); log('已写入 hash.json 至图片库目录。'); }catch{ log('写入 hash.json 失败'); }
+  updateStats(); log(`索引完成，合计 ${count} 张。`);
+  return idxObj;
+}
+
+// ====== Search ======
+const thresholdEl=document.getElementById('threshold');
+const thLabel=document.getElementById('thLabel');
+function updateThLabel(){ const v=Number(thresholdEl.value); thLabel.textContent=`≥ ${v.toFixed(3)}`; thLabel.className='pill '+(v>=0.97?'ok':'warn'); }
+updateThLabel(); thresholdEl.addEventListener('input',updateThLabel);
+
+function gatherCandidates(hashKey){ const base=bucketIndex(hashKey); const set=new Set(); for(let i=-20;i<=20;i++){ const arr=state.bucket[String(base+i)]||[]; for(const k of arr) set.add(k); } return [...set]; }
+function topSimilar(hashKey,threshold){ const candidates=gatherCandidates(hashKey); const rows=[]; for(const k of candidates){ const sim=cmpHash(hashKey,k); const rel=state.photoHash[k]; if(!rel) continue; const meta=state.meta[rel]||{w:0,h:0}; if(sim>=threshold) rows.push({ key:k, sim, rel, w:meta.w, h:meta.h }); } rows.sort((a,b)=>b.sim-a.sim); return rows.slice(0,100); }
+async function searchFile(file,threshold){ const bmp=await loadImageBitmap(file); const key=await pHashFromBitmap(bmp); if(!key) return null; return topSimilar(key,threshold); }
+
+// ====== UI: drop & results ======
+const resultsEl=document.getElementById('results');
+const dropzone=document.getElementById('dropzone');
+const btnPickFile=document.getElementById('btnPickFile');
+function clearResults(){ resultsEl.innerHTML=''; }
+function fmtPct(x){ return (x*100).toFixed(2)+'%'; }
+async function renderCard(rel,sim){ let url=''; if(state.dirHandle){ const parts=rel.split('/'); let dir=state.dirHandle; try{ for(let i=0;i<parts.length-1;i++) dir=await dir.getDirectoryHandle(parts[i]); const fh=await dir.getFileHandle(parts[parts.length-1]); const f=await fh.getFile(); url=URL.createObjectURL(f); }catch{} }
+  const meta=state.meta[rel]||{w:0,h:0};
+  const card=document.createElement('div'); card.className='result';
+  card.innerHTML=
+    `<header><span class="pill">相似度 ${fmtPct(sim)}</span></header>
+     <div class="meta mono">
+       <div>${rel}</div>
+       <div class="muted">${meta.w}×${meta.h}</div>
+     </div>
+     ${url?`<img class="thumb" src="${url}" alt="thumb" />`:`<div class="thumb"></div>`}`;
+  resultsEl.appendChild(card);
+}
+async function handleFiles(files){ if(!state.photoHash||!Object.keys(state.photoHash).length){ alert('请先构建索引'); return; } clearResults(); const th=Number(thresholdEl.value); for(const file of files){ log(`搜索：${file.name}（阈值 ${th}）`); const rows=await searchFile(file,th); state.totalVisits+=1; updateStats(); if(!rows){ log('无法解析该文件。'); continue; } if(rows.length===0){ const empty=document.createElement('div'); empty.className='muted'; empty.textContent='未找到满足阈值的相似图片。'; resultsEl.appendChild(empty); } else { for(const row of rows){ await renderCard(row.rel,row.sim); } log(`返回 ${rows.length} 条结果。`); } } }
+['dragenter','dragover'].forEach(ev=>dropzone.addEventListener(ev,e=>{ e.preventDefault(); dropzone.classList.add('dragover'); }));
+['dragleave','drop'].forEach(ev=>dropzone.addEventListener(ev,e=>{ e.preventDefault(); dropzone.classList.remove('dragover'); }));
+dropzone.addEventListener('drop',async e=>{ const files=[...e.dataTransfer.files].filter(f=>isImageName(f.name)); await handleFiles(files); });
+btnPickFile.addEventListener('click',async()=>{ const picker=document.createElement('input'); picker.type='file'; picker.multiple=true; picker.accept='image/*'; picker.onchange=()=>handleFiles([...picker.files]); picker.click(); });
+</script>
+</body>
+</html>
