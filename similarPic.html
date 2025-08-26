@@ -220,5 +220,6 @@ async function handleFiles(files){ if(!state.photoHash||!Object.keys(state.photo
 dropzone.addEventListener('drop',async e=>{ const files=[...e.dataTransfer.files].filter(f=>isImageName(f.name)); await handleFiles(files); });
 btnPickFile.addEventListener('click',async()=>{ const picker=document.createElement('input'); picker.type='file'; picker.multiple=true; picker.accept='image/*'; picker.onchange=()=>handleFiles([...picker.files]); picker.click(); });
 </script>
+<a href="https://info.flagcounter.com/8QQf"></a>
 </body>
 </html>
