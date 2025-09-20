@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DCT 裁剪演示（支持拖拽，含裁剪后 DCT 显示）</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, PingFang SC, Noto Sans SC, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+    body { margin: 24px; }
+    h1 { font-size: 20px; margin: 0 0 12px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+    .panel { border: 1px solid #ddd; border-radius: 12px; padding: 12px; }
+    .controls { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 12px; }
+    canvas { width: 100%; height: auto; background: #f8f8f8; border-radius: 8px; }
+    .small { color: #666; font-size: 12px; }
+    label { font-weight: 600; }
+    input[type="range"]{ width: 100%; }
+    button { padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; background: #fff; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .stat { font-size: 13px; color: #333; }
+    .dropzone {
+      margin-top: 8px; border: 2px dashed #bbb; border-radius: 12px; padding: 18px; text-align: center; color: #666;
+    }
+    .dropzone.dragover { border-color: #409eff; background: #f0f7ff; color: #2b6cb0; }
+  </style>
+</head>
+<body>
+  <h1>网页 JS：读取图片（拖拽或选择）→ DCT → 保留左上角 <em>n×n</em> → 逆 DCT；并显示“裁剪后的 DCT 谱”</h1>
+
+  <div class="row">
+    <div class="panel">
+      <div class="controls">
+        <div>
+          <!-- <label>选择图片：</label> -->
+          <input id="file" type="file" accept="image/*" />
+          <div id="dropzone" class="dropzone">将图片文件拖拽到此处，或点击上方选择</div>
+        </div>
+        <div>
+          <label>最大处理尺寸（较大图会等比缩放）：</label>
+          <input id="maxSize" type="number" min="64" max="2048" value="512" />
+        </div>
+        <div>
+          <label>保留的 DCT 系数尺寸 n（左上角 n×n）：</label>
+          <input id="nRange" type="range" min="1" max="256" value="32" />
+          <div class="small">当前 n = <span id="nVal">32</span></div>
+        </div>
+        <div>
+          <label>
+            <input id="grayscale" type="checkbox" /> 以灰度处理（默认按 RGB 三通道处理）
+          </label>
+        </div>
+        <div>
+          <button id="run" disabled>执行 DCT → 裁剪 → 逆 DCT</button>
+          <button id="download" disabled>下载重建图</button>
+        </div>
+        <div class="stat" id="stat"></div>
+      </div>
+
+      <div class="row" style="grid-template-columns: 1fr 1fr; gap: 16px;">
+        <div>
+          <div class="small">原图</div>
+          <canvas id="orig"></canvas>
+        </div>
+        <div>
+          <div class="small">重建图（只保留左上角 n×n 频域系数）</div>
+          <canvas id="recon"></canvas>
+        </div>
+        <div style="margin-top: 16px;">
+          <div class="small">裁剪后的 DCT 幅度谱（log 缩放、未中心化，越亮代表 |系数| 越大）</div>
+          <canvas id="dctviz"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const fileInput = document.getElementById('file');
+  const dropzone = document.getElementById('dropzone');
+  const maxSizeInput = document.getElementById('maxSize');
+  const nRange = document.getElementById('nRange');
+  const nVal = document.getElementById('nVal');
+  const runBtn = document.getElementById('run');
+  const dlBtn = document.getElementById('download');
+  const grayscaleChk = document.getElementById('grayscale');
+  const statDiv = document.getElementById('stat');
+
+  const cOrig = document.getElementById('orig');
+  const cRecon = document.getElementById('recon');
+  const cDct = document.getElementById('dctviz');
+  const ctxOrig = cOrig.getContext('2d');
+  const ctxRecon = cRecon.getContext('2d');
+  const ctxDct = cDct.getContext('2d');
+
+  let imgW = 0, imgH = 0;
+  let imgData = null; // 原始像素（可能缩放后）
+
+  nRange.addEventListener('input', () => { nVal.textContent = nRange.value; });
+
+  // —— 文件加载（选择 or 拖拽）——
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (file) handleFile(file);
+  });
+
+  ;['dragenter','dragover'].forEach(type => dropzone.addEventListener(type, (ev)=>{
+    ev.preventDefault(); ev.stopPropagation(); dropzone.classList.add('dragover');
+  }));
+  ;['dragleave','drop'].forEach(type => dropzone.addEventListener(type, (ev)=>{
+    ev.preventDefault(); ev.stopPropagation(); dropzone.classList.remove('dragover');
+  }));
+  dropzone.addEventListener('drop', (ev)=>{
+    const file = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+    if (file) handleFile(file);
+  });
+
+  function handleFile(file){
+    if (!file.type.startsWith('image/')) { alert('请拖入图片文件'); return; }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const maxSize = Math.max(64, Math.min(2048, Number(maxSizeInput.value)||512));
+      const ratio = Math.min(1, maxSize / Math.max(img.width, img.height));
+      imgW = Math.max(1, Math.round(img.width * ratio));
+      imgH = Math.max(1, Math.round(img.height * ratio));
+      cOrig.width = imgW; cOrig.height = imgH;
+      cRecon.width = imgW; cRecon.height = imgH;
+      cDct.width = imgW; cDct.height = imgH;
+
+      ctxOrig.drawImage(img, 0, 0, imgW, imgH);
+      imgData = ctxOrig.getImageData(0, 0, imgW, imgH);
+
+      const maxN = Math.min(imgW, imgH);
+      nRange.max = String(maxN);
+      if (Number(nRange.value) > maxN) nRange.value = String(Math.max(1, Math.floor(maxN/2)));
+      nVal.textContent = nRange.value;
+
+      runBtn.disabled = false;
+      dlBtn.disabled = true;
+      statDiv.textContent = '';
+      ctxDct.clearRect(0,0,cDct.width,cDct.height);
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = () => { alert('图片加载失败'); URL.revokeObjectURL(url); };
+    img.src = url;
+  }
+
+  // —— 处理 ——
+  runBtn.addEventListener('click', () => {
+    if (!imgData) return;
+    const n = Number(nRange.value);
+    const useGray = grayscaleChk.checked;
+
+    const t0 = performance.now();
+
+    let reconstructed, dctForViz;
+    if (useGray) {
+      const gray = new Float64Array(imgW*imgH);
+      const data = imgData.data;
+      for (let i=0, p=0; i<data.length; i+=4, p++) {
+        gray[p] = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
+      }
+      const dct = dct2(gray, imgW, imgH);
+      maskHighFreq(dct, imgW, imgH, n);
+      dctForViz = dct; // 用于可视化
+      const rec = idct2(dct, imgW, imgH);
+      reconstructed = new Uint8ClampedArray(imgW*imgH*4);
+      for (let p=0, i=0; p<rec.length; p++, i+=4) {
+        const v = clamp255(rec[p]);
+        reconstructed[i] = reconstructed[i+1] = reconstructed[i+2] = v;
+        reconstructed[i+3] = 255;
+      }
+    } else {
+      // RGB 通道分别处理，并以亮度近似可视化 DCT（对 R/G/B 的 |coef| 取均值）
+      const R = new Float64Array(imgW*imgH);
+      const G = new Float64Array(imgW*imgH);
+      const B = new Float64Array(imgW*imgH);
+      const data = imgData.data;
+      for (let i=0, p=0; i<data.length; i+=4, p++) {
+        R[p] = data[i]; G[p] = data[i+1]; B[p] = data[i+2];
+      }
+      const dctR = dct2(R, imgW, imgH); maskHighFreq(dctR, imgW, imgH, n);
+      const dctG = dct2(G, imgW, imgH); maskHighFreq(dctG, imgW, imgH, n);
+      const dctB = dct2(B, imgW, imgH); maskHighFreq(dctB, imgW, imgH, n);
+
+      // 合成一个幅度用于可视化
+      dctForViz = new Float64Array(imgW*imgH);
+      for (let p=0; p<dctForViz.length; p++){
+        dctForViz[p] = (Math.abs(dctR[p]) + Math.abs(dctG[p]) + Math.abs(dctB[p])) / 3;
+      }
+
+      const recR = idct2(dctR, imgW, imgH);
+      const recG = idct2(dctG, imgW, imgH);
+      const recB = idct2(dctB, imgW, imgH);
+      reconstructed = new Uint8ClampedArray(imgW*imgH*4);
+      for (let p=0, i=0; p<recR.length; p++, i+=4) {
+        reconstructed[i]   = clamp255(recR[p]);
+        reconstructed[i+1] = clamp255(recG[p]);
+        reconstructed[i+2] = clamp255(recB[p]);
+        reconstructed[i+3] = 255;
+      }
+    }
+
+    const t1 = performance.now();
+
+    // 重建图
+    const out = new ImageData(reconstructed, imgW, imgH);
+    ctxRecon.putImageData(out, 0, 0);
+
+    // 裁剪后的 DCT 幅度谱可视化（log1p 归一化）
+    visualizeDCT(dctForViz, imgW, imgH, ctxDct);
+
+    dlBtn.disabled = false;
+
+    const kept = n*n;
+    const total = imgW*imgH;
+    const pctW = ((n/imgW)*100).toFixed(2);
+    const pctH = ((n/imgH)*100).toFixed(2);
+    const pctCoe = ((kept/total)*100).toFixed(2);
+
+    statDiv.textContent = `尺寸 ${imgW}×${imgH} | n = ${n} （宽度占比 ${pctW}%、高度占比 ${pctH}%）| 保留系数 ${kept} / ${total} ≈ ${pctCoe}% | 处理耗时 ${(t1-t0).toFixed(1)} ms`;
+  });
+
+  dlBtn.addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.download = `reconstructed_n${nRange.value}.png`;
+    a.href = cRecon.toDataURL('image/png');
+    a.click();
+  });
+
+  // —— 数学与实现 ——
+  function clamp255(v){ v = Math.round(v); return v < 0 ? 0 : (v > 255 ? 255 : v); }
+
+  function visualizeDCT(coef, W, H, ctx){
+    // 计算 log1p(|coef|) 并线性拉伸到 [0,255]
+    let maxv = 0;
+    for (let i=0; i<coef.length; i++){
+      const v = Math.log1p(Math.abs(coef[i]));
+      if (v > maxv) maxv = v;
+    }
+    const img = ctx.createImageData(W,H);
+    for (let p=0, i=0; p<coef.length; p++, i+=4){
+      const v = Math.log1p(Math.abs(coef[p]));
+      const g = maxv>0 ? Math.round(255 * v / maxv) : 0;
+      img.data[i]=img.data[i+1]=img.data[i+2]=g; img.data[i+3]=255;
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  // 2D DCT-II（正交归一化），先行后列（可分离）
+  function dct2(src, W, H){
+    const tmp = new Float64Array(W*H);
+    const dst = new Float64Array(W*H);
+
+    const cosW = cosTable(W); const cosH = cosTable(H);
+    const sW = Math.sqrt(2/W), sH = Math.sqrt(2/H);
+
+    // 行方向 DCT
+    const rowIn = new Float64Array(W);
+    const rowOut = new Float64Array(W);
+    for (let y=0; y<H; y++){
+      const off = y*W;
+      for (let x=0; x<W; x++) rowIn[x] = src[off+x];
+      dct1d(rowIn, rowOut, cosW, sW);
+      for (let u=0; u<W; u++) tmp[off+u] = rowOut[u];
+    }
+
+    // 列方向 DCT
+    const colIn = new Float64Array(H);
+    const colOut = new Float64Array(H);
+    for (let u=0; u<W; u++){
+      for (let y=0; y<H; y++) colIn[y] = tmp[y*W+u];
+      dct1d(colIn, colOut, cosH, sH);
+      for (let v=0; v<H; v++) dst[v*W+u] = colOut[v];
+    }
+    return dst;
+  }
+
+  // 2D 逆 DCT（DCT-III）
+  function idct2(src, W, H){
+    const tmp = new Float64Array(W*H);
+    const dst = new Float64Array(W*H);
+
+    const cosW = cosTable(W); const cosH = cosTable(H);
+    const sW = Math.sqrt(2/W), sH = Math.sqrt(2/H);
+
+    // 列方向 IDCT
+    const colIn = new Float64Array(H);
+    const colOut = new Float64Array(H);
+    for (let u=0; u<W; u++){
+      for (let v=0; v<H; v++) colIn[v] = src[v*W+u];
+      idct1d(colIn, colOut, cosH, sH);
+      for (let y=0; y<H; y++) tmp[y*W+u] = colOut[y];
+    }
+
+    // 行方向 IDCT
+    const rowIn = new Float64Array(W);
+    const rowOut = new Float64Array(W);
+    for (let y=0; y<H; y++){
+      const off = y*W;
+      for (let u=0; u<W; u++) rowIn[u] = tmp[off+u];
+      idct1d(rowIn, rowOut, cosW, sW);
+      for (let x=0; x<W; x++) dst[off+x] = rowOut[x];
+    }
+    return dst;
+  }
+
+  // 1D DCT-II（正交）：
+  function dct1d(inp, out, cosTab, s){
+    const N = inp.length;
+    for (let k=0; k<N; k++){
+      let sum = 0;
+      const row = cosTab[k];
+      for (let n=0; n<N; n++) sum += inp[n] * row[n];
+      const scale0 = (k===0 ? 1/Math.SQRT2 : 1);
+      out[k] = s * scale0 * sum;
+    }
+  }
+
+  // 1D DCT-III（正交逆变换）
+  function idct1d(inp, out, cosTab, s){
+    const N = inp.length;
+    for (let n=0; n<N; n++){
+      let sum = 0;
+      for (let k=0; k<N; k++){
+        const scale0 = (k===0 ? 1/Math.SQRT2 : 1);
+        sum += scale0 * inp[k] * cosTab[k][n];
+      }
+      out[n] = s * sum;
+    }
+  }
+
+  // 预计算 cos 表：返回二维数组 cos[k][n]
+  const COS_CACHE = new Map();
+  function cosTable(N){
+    const key = `N${N}`;
+    if (COS_CACHE.has(key)) return COS_CACHE.get(key);
+    const tab = Array.from({length: N}, (_, k) => {
+      const row = new Float64Array(N);
+      for (let n=0; n<N; n++){
+        row[n] = Math.cos(Math.PI * (2*n + 1) * k / (2*N));
+      }
+      return row;
+    });
+    COS_CACHE.set(key, tab);
+    return tab;
+  }
+
+  // 将 (u>=n || v>=n) 的系数清零
+  function maskHighFreq(coef, W, H, n){
+    const nW = Math.min(n, W), nH = Math.min(n, H);
+    for (let v=0; v<H; v++){
+      for (let u=0; u<W; u++){
+        if (u >= nW || v >= nH) coef[v*W + u] = 0;
+      }
+    }
+  }
+})();
+</script>
+</body>
+</html>
