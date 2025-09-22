@@ -117,8 +117,15 @@ function bucketIndex(hash){ return Math.round(cmpHash(ROOT_HASH, hash) * 1000); 
 // ====== Index state ======
 const state={ dirHandle:null, photoHash:{}, bucket:{}, meta:{}, distance:20 };
 function applyIndex(obj){ state.photoHash=obj.photoHash||{}; state.bucket=obj.bucket||{}; state.meta=obj.meta||{}; updateStats(); }
-function updateStats(){ document.getElementById('countPhotos').textContent=Object.keys(state.photoHash).length;}
-function addToIndex(hashKey,relPath,w,h){ if(!state.photoHash[hashKey]) state.photoHash[hashKey]=relPath; const idx=String(bucketIndex(hashKey)); if(!state.bucket[idx]) state.bucket[idx]=[]; state.bucket[idx].push(hashKey); if(!state.meta[relPath]) state.meta[relPath]={w,h}; }
+function updateStats(){ const total=Object.values(state.photoHash).reduce((sum,list)=>sum+(Array.isArray(list)?list.length:0),0); document.getElementById('countPhotos').textContent=total; }
+function addToIndex(hashKey,relPath,w,h){
+  if(!state.photoHash[hashKey]) state.photoHash[hashKey]=[];
+  if(!state.photoHash[hashKey].includes(relPath)) state.photoHash[hashKey].push(relPath);
+  const idx=String(bucketIndex(hashKey));
+  if(!state.bucket[idx]) state.bucket[idx]=[];
+  if(!state.bucket[idx].includes(hashKey)) state.bucket[idx].push(hashKey);
+  if(!state.meta[relPath]) state.meta[relPath]={w,h};
+}
 
 // ====== FS traversal ======
 async function* walkDir(dirHandle,prefix=''){ for await(const entry of dirHandle.values()){ const rel=prefix?`${prefix}/${entry.name}`:entry.name; if(entry.kind==='file'){ yield{handle:entry,rel}; } else if(entry.kind==='directory'&&!entry.name.startsWith('.')){ yield* walkDir(entry,rel); } } }
@@ -140,22 +147,22 @@ btnPickDir.addEventListener('click', async()=>{
     libStatus.textContent=`Directory : ${handle.name}`; 
     log(`Directory has selected :${handle.name}`);
 
-    // 检查是否存在 hash.json
+    // 检查是否存在 SimPicHash.json
     let hasHash=false; 
-    try{ await handle.getFileHandle('hash.json'); hasHash=true; }catch{}
+    try{ await handle.getFileHandle('SimPicHash.json'); hasHash=true; }catch{}
     if(hasHash){
       try{
-        const fh=await handle.getFileHandle('hash.json');
+        const fh=await handle.getFileHandle('SimPicHash.json');
         const file=await fh.getFile();
         const text=await file.text();
         const obj=JSON.parse(text);
         applyIndex(obj);
-        log('has been imported from hash.json');
+        log('has been imported from SimPicHash.json');
       }catch(e){
-        log('reading hash.json failed and a rebuild will be required.');
+        log('reading SimPicHash.json failed and a rebuild will be required.');
       }
     } else {
-      log('hash.json was not detected. Please build first.');
+      log('SimPicHash.json was not detected. Please build first.');
     }
 
 
@@ -183,7 +190,7 @@ async function buildIndexToDir(){
     catch{ log(`Skip ${rel}`); }
   }
   const idxObj={ photoHash:state.photoHash, bucket:state.bucket, meta:state.meta };
-  try{ const fh=await state.dirHandle.getFileHandle('hash.json',{create:true}); const w=await fh.createWritable(); await w.write(JSON.stringify(idxObj)); await w.close(); log('hash.json written to the pictures directory'); }catch{ log('written hash.json failed'); }
+  try{ const fh=await state.dirHandle.getFileHandle('SimPicHash.json',{create:true}); const w=await fh.createWritable(); await w.write(JSON.stringify(idxObj)); await w.close(); log('SimPicHash.json written to the pictures directory'); }catch{ log('written SimPicHash.json failed'); }
   updateStats(); log(`Build Finish，Total Pics : ${count}`);
   return idxObj;
 }
@@ -195,7 +202,23 @@ function updateThLabel(){ const v=Number(thresholdEl.value); thLabel.textContent
 updateThLabel(); thresholdEl.addEventListener('input',updateThLabel);
 
 function gatherCandidates(hashKey){ const base=bucketIndex(hashKey); const set=new Set(); for(let i=-20;i<=20;i++){ const arr=state.bucket[String(base+i)]||[]; for(const k of arr) set.add(k); } return [...set]; }
-function topSimilar(hashKey,threshold){ const candidates=gatherCandidates(hashKey); const rows=[]; for(const k of candidates){ const sim=cmpHash(hashKey,k); const rel=state.photoHash[k]; if(!rel) continue; const meta=state.meta[rel]||{w:0,h:0}; if(sim>=threshold) rows.push({ key:k, sim, rel, w:meta.w, h:meta.h }); } rows.sort((a,b)=>b.sim-a.sim); return rows.slice(0,100); }
+function topSimilar(hashKey,threshold){
+  const candidates=gatherCandidates(hashKey);
+  const rows=[];
+  for(const k of candidates){
+    const sim=cmpHash(hashKey,k);
+    const relList=state.photoHash[k];
+    if(!Array.isArray(relList) || !relList.length) continue;
+    if(sim>=threshold){
+      for(const rel of relList){
+        const meta=state.meta[rel]||{w:0,h:0};
+        rows.push({ key:k, sim, rel, w:meta.w, h:meta.h });
+      }
+    }
+  }
+  rows.sort((a,b)=>b.sim-a.sim);
+  return rows.slice(0,100);
+}
 async function searchFile(file,threshold){ const bmp=await loadImageBitmap(file); const key=await pHashFromBitmap(bmp); if(!key) return null; return topSimilar(key,threshold); }
 
 // ====== UI: drop & results ======
