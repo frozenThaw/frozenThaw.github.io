@@ -61,8 +61,8 @@
         <h2>②Setting</h2>
         <div class="slider-wrap">
           <label for="threshold">Similar</label>
-          <input type="range" id="threshold" min="0.9" max="1.0" value="0.95" step="0.005">
-          <span id="thLabel" class="pill ok">≥ 0.950</span>
+          <input type="range" id="threshold" min="0.9" max="1.0" value="0.98" step="0.005">
+          <span id="thLabel" class="pill ok">≥ 0.980</span>
         </div>
         <div style="height:12px"></div>
         <div class="muted">Search Pictures：<span id="countPhotos">0</span></div>
@@ -203,7 +203,7 @@ async function buildIndexToDir(){
 // ====== Search ======
 const thresholdEl=document.getElementById('threshold');
 const thLabel=document.getElementById('thLabel');
-function updateThLabel(){ const v=Number(thresholdEl.value); thLabel.textContent=`≥ ${v.toFixed(3)}`; thLabel.className='pill '+(v>=0.97?'ok':'warn'); }
+function updateThLabel(){ const v=Number(thresholdEl.value); thLabel.textContent=`≥ ${v.toFixed(3)}`; thLabel.className='pill '+(v>=0.98?'ok':'warn'); }
 updateThLabel(); thresholdEl.addEventListener('input',updateThLabel);
 
 function gatherCandidates(hashKey){ const base=bucketIndex(hashKey); const set=new Set(); for(let i=-20;i<=20;i++){ const arr=state.bucket[String(base+i)]||[]; for(const k of arr) set.add(k); } return [...set]; }
